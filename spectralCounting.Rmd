@@ -1,0 +1,175 @@
+---
+title: "SpectralCounting"
+author: "Nick Carruthers"
+date: "07/12/2020"
+output: html_document
+params: 
+     sdrfInput: "sdrf.tsv"
+     mzTabInput: "out.mzTab"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r include = FALSE}
+print("starting markdown")
+
+library(dplyr)
+library(edgeR)
+library(ggplot2)
+library(MSnbase)
+library(MSstats)
+library(plotly)
+library(qvalue)
+library(tidyr)
+
+theme_set(theme_bw(base_size = 10))
+```
+
+```{r}
+fileConn<-file("RmdOutput.log")
+writeLines(c(getwd(), ls(), params$sdrfInput, params$mzTabInput), fileConn)
+close(fileConn)
+```
+
+
+```{r}
+#mzTabInput <- "D:\\ncarrut\\Documents\\work\\1824-1865\\fullyTrypticRes\\proteomics_lfq\\out.mzTab"
+#sdrfInput <- "D:\\ncarrut\\Documents\\work\\1824-1865\\sdrf.tsv"
+
+sdrf <- read.delim(params$sdrfInput, stringsAsFactors = FALSE)
+```
+
+
+
+```{r}
+## Prepare spectral count data
+## read mzml and combine with sdrf
+MzTabRes <- MzTab(params$mzTabInput)
+
+## Use metadata to pair msRun to file names
+MzTabMetadata <- metadata(MzTabRes)
+
+fileElements <- grepl("ms_run", names(MzTabMetadata)) & grepl("-location", names(MzTabMetadata))
+runMatchFrame <- data.frame(name = names(MzTabMetadata)[fileElements], 
+                            location = unlist(MzTabMetadata[fileElements])) %>%
+  mutate(msRun = sapply(strsplit(name, "-"), '[', 1)) %>%
+  mutate(fileName = sub('\\..[^\\.]*$', '', basename(location)))
+
+## Use sdrf to pair msRun to file names to assay.name which will be used to compile
+## the counts
+augSdrf <- sdrf %>%
+  mutate(fileName = sub('\\..[^\\.]*$', '', basename(comment.data.file.))) %>%
+  inner_join(runMatchFrame, by = "fileName")
+
+
+## collect PSMs
+PSMtable <- psms(MzTabRes) %>%
+  mutate(msRun = sapply(strsplit(spectra_ref, ':'), '[', 1)) %>%
+  inner_join(dplyr::select(augSdrf, assay.name, msRun), by = "msRun") %>%
+  pivot_wider(id_cols = "accession", names_from = "assay.name", 
+              values_from = PSM_ID, values_fn = list(PSM_ID = length))
+
+```
+
+```{r}
+## EdgeR
+PSMFrame <- data.frame(PSMtable)
+row.names(PSMFrame) <- PSMFrame$accession
+PSMFrame[is.na(PSMFrame)] <- 0
+
+## Ensure column order matches the sdrf file order
+orderedColNames <- left_join(augSdrf['assay.name'], data.frame(assay.name = colnames(PSMFrame)), by = "assay.name")
+PSMFrame <- PSMFrame[,make.names(orderedColNames[[1]])]
+
+# Filter data such that a row must have = 10 counts
+OKtest <- rowSums(PSMFrame) >= 10
+filteredPSMFrame <- PSMFrame[OKtest, ]
+
+## Estimate dispersion
+group <- factor(augSdrf$Factor.value.tissue.)
+y <- DGEList(counts=filteredPSMFrame, group=group)
+y <- calcNormFactors(y)
+design <- model.matrix(~group)
+y <- estimateDisp(y,design)
+
+## Perform quasi-likelihood F-tests:
+fit <- glmQLFit(y, design)
+
+qlf <- glmQLFTest(fit, coef=2)
+
+qObj <- qvalue(qlf$table$PValue)
+```
+
+## Spectral counting analysis:
+`r nrow(PSMFrame)` Proteins were detected and `r nrow(filteredPSMFrame)` had sufficient data for quantification (at least 10 total spectral counts).  `r ncol(PSMFrame)` samples were analyzed.  F-tests were performed in edgeR to identify proteins that were affected between groups.  `r sum(qObj$qvalues) < 0.01` proteins were affected between groups (q < 0.01).  
+
+
+```{r}
+hist(qObj) 
+```
+
+**Figure 1** p-value histogram.  A flat distribution of p-values between 0 and 1 indicates no change.  Accumulation of p-values close to 0 indicates that some proteins were affected between groups.  Note that due to multiple testing it may not be possible to identify which ones with a reasonable false discovery rate.  
+
+```{r}
+## extract proteins for description
+protein <- proteins(MzTabRes) %>%
+  mutate(description = sapply(strsplit(description, " OS"), '[', 1))
+
+
+volcanoPlot <- qlf$table %>%
+  mutate(accession = row.names(qlf$table)) %>%
+  inner_join(dplyr::select(protein, accession, description), by = "accession") %>%
+  mutate(FC = 2^logFC) %>%
+  mutate(qValues = qvalue(PValue)$qvalues) %>%
+  mutate(changed = !is.na(qValues) & qValues < 0.001) %>%
+  mutate(PValue = -log10(PValue)) %>%
+  ggplot(aes(x = FC, y = PValue, color = changed, text = description)) +
+  geom_point() +
+  scale_color_manual(values = c("black", "red")) +
+  scale_x_continuous(trans = "log2", breaks = 2^seq(-4, 8, 2)) +
+  labs(x = "Fold change", y = "-log10 p-value")
+
+ggplotly(volcanoPlot)
+```
+
+**Figure 2** Volcano plot.  The x-axis is fold-change (wound vs plasma) and the y axis is -log10 p-value.  Points are red if they were different between groups (F-test q < 0.01)
+
+```{r}
+MAplot <- qlf$table %>%
+  mutate(intensity = rowSums(PSMFrame[OKtest, ])) %>%
+  mutate(accession = row.names(qlf$table)) %>%
+  inner_join(dplyr::select(protein, accession, description), by = "accession") %>%
+  mutate(FC = 2^logFC) %>%
+  mutate(qValues = qvalue(PValue)$qvalues) %>%
+  mutate(changed = !is.na(qValues) & qValues < 0.001) %>%
+  mutate(PValue = -log10(PValue)) %>%
+  ggplot(aes(x = intensity, y = FC, color = changed, text = description)) +
+  geom_point() +
+  scale_color_manual(values = c("black", "red")) +
+  scale_y_continuous(trans = "log2", breaks = 2^seq(-4, 8, 2)) +
+  scale_x_continuous(trans = "log10") +
+  labs(x = "Total Counts", y = "Fold-change")
+
+ggplotly(MAplot)
+
+```
+
+```{r}
+## output table
+
+data.frame(qlf$table, PSMFrame[OKtest, ]) %>%
+  mutate(intensity = rowSums(PSMFrame[OKtest, ])) %>%
+  mutate(accession = row.names(qlf$table)) %>%
+  inner_join(dplyr::select(protein, accession, description), by = "accession") %>%
+  mutate(qValues = qvalue(PValue)$qvalues) %>%
+  relocate(description) %>%
+  relocate(accession) %>%
+  relocate(intensity, .after = logFC) %>%
+  relocate(qValues, .after = PValue) %>%
+  write.csv(file = "edgeRoutput.csv", row.names = FALSE)
+
+
+```
+
