@@ -1,11 +1,7 @@
 ---
 title: "SpectralCounting"
 author: "Nick Carruthers"
-date: "07/12/2020"
 output: html_document
-params: 
-     sdrfInput: "sdrf.tsv"
-     mzTabInput: "out.mzTab"
 ---
 
 ```{r setup, include=FALSE}
@@ -13,7 +9,6 @@ knitr::opts_chunk$set(echo = FALSE)
 ```
 
 ```{r include = FALSE}
-print("starting markdown")
 
 library(dplyr)
 library(edgeR)
@@ -29,16 +24,13 @@ theme_set(theme_bw(base_size = 10))
 
 ```{r}
 fileConn<-file("RmdOutput.log")
-writeLines(c(getwd(), ls(), params$sdrfInput, params$mzTabInput), fileConn)
+writeLines(c(getwd(), ls(), args[1], args[2]), fileConn)
 close(fileConn)
 ```
 
 
 ```{r}
-#mzTabInput <- "D:\\ncarrut\\Documents\\work\\1824-1865\\fullyTrypticRes\\proteomics_lfq\\out.mzTab"
-#sdrfInput <- "D:\\ncarrut\\Documents\\work\\1824-1865\\sdrf.tsv"
-
-sdrf <- read.delim(params$sdrfInput, stringsAsFactors = FALSE)
+sdrf <- read.delim(args[1], stringsAsFactors = FALSE)
 ```
 
 
@@ -46,7 +38,7 @@ sdrf <- read.delim(params$sdrfInput, stringsAsFactors = FALSE)
 ```{r}
 ## Prepare spectral count data
 ## read mzml and combine with sdrf
-MzTabRes <- MzTab(params$mzTabInput)
+MzTabRes <- MzTab(args[2])
 
 ## Use metadata to pair msRun to file names
 MzTabMetadata <- metadata(MzTabRes)

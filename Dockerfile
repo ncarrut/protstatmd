@@ -5,7 +5,8 @@ RUN apt-get update \
 	&& apt-get install -y --no-install-recommends libcurl4-openssl-dev \
     libssl-dev/unstable \
     libxml2-dev \
-    libnetcdf-dev
+    libnetcdf-dev \
+    procps
 
 RUN install2.r --error \
     BiocManager \
