@@ -1,6 +1,5 @@
 ---
-title: "SpectralCounting"
-author: "Nick Carruthers"
+title: "Spectral Counting Analysis"
 output: html_document
 ---
 
@@ -9,158 +8,337 @@ knitr::opts_chunk$set(echo = FALSE)
 ```
 
 ```{r include = FALSE}
-
+library(conflicted)
 library(dplyr)
-library(edgeR)
-library(ggplot2)
-library(MSnbase)
-library(MSstats)
-library(plotly)
-library(qvalue)
 library(tidyr)
+library(MSnbase)
+library(ggplot2)
+library(gridExtra)
+library(scales)
+
+library(MSstats)
+library(edgeR)
+library(qvalue)
+
+library(plotly)
+library(DT)
+library(htmltools)
 
 theme_set(theme_bw(base_size = 10))
 ```
 
 ```{r}
-fileConn<-file("RmdOutput.log")
-writeLines(c(getwd(), ls(), args[1], args[2]), fileConn)
-close(fileConn)
+if (length(args)<2) {
+  print(usage)
+  stop("At least the first two arguments must be supplied (input csv and input mzTab).n", call.=FALSE)
+}
+if (length(args)<=2) {
+  # contrasts
+  args[3] = "pairwise"
+}
+if (length(args)<=3) {
+  # default control condition
+  args[4] = ""
+}
+if (length(args)<=4) {
+  # default output prefix
+  args[5] = "edgeR"
+}
+
+## Make sure to set these to arguments !
+csv_input <- args[1]
+mzTab_input <- args[2]
+contrast_str <- args[3]
+control_str <- args[4]
+out_prefix <- "spectralCounts"
+folder <- dirname(mzTab_input)
+filename <- basename(mzTab_input)
+mzTab_output <- paste0(folder,'/',out_prefix,filename)
 ```
 
 
 ```{r}
-sdrf <- read.delim(args[1], stringsAsFactors = FALSE)
+# fileConn<-file("RmdOutput.log")
+# writeLines(c(getwd(), ls(), args[1], args[2]), fileConn)
+# close(fileConn)
 ```
 
 
+```{r}
+## Prepare Contrasts
+data <- read.csv(csv_input, stringsAsFactors = FALSE)
+
+lvls <- levels(as.factor(data$Condition))
+if (length(lvls) == 1)
+{
+  print("Only one condition found. No contrasts to be tested. If this is not the case, please check your experimental design.")
+} else {
+  if (contrast_str == "pairwise")
+  {
+    if (control_str == "")
+    {
+      l <- length(lvls)
+      contrast_mat <- matrix(nrow = l * (l-1) / 2, ncol = l)
+      rownames(contrast_mat) <- rep(NA, l * (l-1) / 2)
+      colnames(contrast_mat) <- lvls
+      c <- 1
+      for (i in 1:(l-1))
+      {
+        for (j in (i+1):l)
+        {
+          comparison <- rep(0,l)
+          comparison[i] <- -1
+          comparison[j] <- 1
+          contrast_mat[c,] <- comparison
+          rownames(contrast_mat)[c] <- paste0(lvls[i],"-",lvls[j])
+          c <- c+1
+        }
+      }
+    } else {
+      control <- which(as.character(lvls) == control_str)
+      if (length(control) == 0)
+      {
+        stop("Control condition not part of found levels.n", call.=FALSE)
+      }
+      
+      l <- length(lvls)
+      contrast_mat <- matrix(nrow = l-1, ncol = l)
+      rownames(contrast_mat) <- rep(NA, l-1)
+      colnames(contrast_mat) <- lvls
+      c <- 1
+      for (j in setdiff(1:l,control))
+      {
+        comparison <- rep(0,l)
+        comparison[i] <- -1
+        comparison[j] <- 1
+        contrast_mat[c,] <- comparison
+        rownames(contrast_mat)[c] <- paste0(lvls[i],"-",lvls[j])
+        c <- c+1
+      }
+    }
+  } else {
+    print("Specific contrasts not supported yet.")
+    exit(1)
+  }
+  
+  #print ("Contrasts to be tested:")
+  #print (contrast_mat)
+}
+```
 
 ```{r}
-## Prepare spectral count data
-## read mzml and combine with sdrf
-MzTabRes <- MzTab(args[2])
+## Reconfigure contrast matrix for edgeR
+csv2mzTab <- data %>%
+  select(Condition, BioReplicate, Run, Reference) %>%
+  unique() %>%
+  mutate(msRun = paste0("ms_run[", Run, "]")) %>%
+  mutate(conditionRep = paste0(Condition, "_", BioReplicate))
+  
+## conditionRep will be the same for technical replicates and fractions.
+## They will be column names in the count matrix which means technical replicates 
+## and fractions will be pooled.
 
-## Use metadata to pair msRun to file names
-MzTabMetadata <- metadata(MzTabRes)
-
-fileElements <- grepl("ms_run", names(MzTabMetadata)) & grepl("-location", names(MzTabMetadata))
-runMatchFrame <- data.frame(name = names(MzTabMetadata)[fileElements], 
-                            location = unlist(MzTabMetadata[fileElements])) %>%
-  mutate(msRun = sapply(strsplit(name, "-"), '[', 1)) %>%
-  mutate(fileName = sub('\\..[^\\.]*$', '', basename(location)))
-
-## Use sdrf to pair msRun to file names to assay.name which will be used to compile
-## the counts
-augSdrf <- sdrf %>%
-  mutate(fileName = sub('\\..[^\\.]*$', '', basename(comment.data.file.))) %>%
-  inner_join(runMatchFrame, by = "fileName")
+```
 
 
+```{r}
 ## collect PSMs
+MzTabRes <- MzTab(mzTab_input)
 PSMtable <- psms(MzTabRes) %>%
   mutate(msRun = sapply(strsplit(spectra_ref, ':'), '[', 1)) %>%
-  inner_join(dplyr::select(augSdrf, assay.name, msRun), by = "msRun") %>%
-  pivot_wider(id_cols = "accession", names_from = "assay.name", 
+  inner_join(csv2mzTab, by = "msRun") %>%
+  pivot_wider(id_cols = "accession", names_from = "conditionRep", 
               values_from = PSM_ID, values_fn = list(PSM_ID = length))
 
 ```
+
 
 ```{r}
 ## EdgeR
 PSMFrame <- data.frame(PSMtable)
 row.names(PSMFrame) <- PSMFrame$accession
+PSMFrame <- PSMFrame[, -1]
 PSMFrame[is.na(PSMFrame)] <- 0
 
-## Ensure column order matches the sdrf file order
-orderedColNames <- left_join(augSdrf['assay.name'], data.frame(assay.name = colnames(PSMFrame)), by = "assay.name")
-PSMFrame <- PSMFrame[,make.names(orderedColNames[[1]])]
-
-# Filter data such that a row must have = 10 counts
+# remove rows with less than 10 counts
 OKtest <- rowSums(PSMFrame) >= 10
 filteredPSMFrame <- PSMFrame[OKtest, ]
 
-## Estimate dispersion
-group <- factor(augSdrf$Factor.value.tissue.)
+## sort csv2mzTab so that rows correspond to PSMFrame columns
+csv2mzTabSorted <- left_join(data.frame(conditionRep = colnames(PSMFrame)),
+                             csv2mzTab %>% mutate(conditionRep = make.names(conditionRep)),
+                             by = "conditionRep")
+
+## prepare design
+group <- factor(csv2mzTabSorted$Condition)
 y <- DGEList(counts=filteredPSMFrame, group=group)
 y <- calcNormFactors(y)
-design <- model.matrix(~group)
-y <- estimateDisp(y,design)
+design <- model.matrix(~ 0 + group)
+colnames(design) <- gsub("group", "", colnames(design))
 
-## Perform quasi-likelihood F-tests:
+## Make sure design matrix corresponds to contrast mat
+if(!all(colnames(contrast_mat) == colnames(design))){
+  stop("Error in correspondance between contrast and design matrix")
+}
+
+## Estimate dispersion and perform quasi-likelihood F-tests:
+y <- estimateDisp(y, design)
 fit <- glmQLFit(y, design)
 
-qlf <- glmQLFTest(fit, coef=2)
+## Iterate through the contrasts
+qlfList <- list()
+qObjList <- list()
+for(i in 1:nrow(contrast_mat)){
+  qlfList[[i]] <- glmQLFTest(fit, contrast = contrast_mat[i,])
+  qObjList[[i]] <- qvalue(qlfList[[i]]$table$PValue)
+}
 
-qObj <- qvalue(qlf$table$PValue)
 ```
 
-## Spectral counting analysis:
-`r nrow(PSMFrame)` Proteins were detected and `r nrow(filteredPSMFrame)` had sufficient data for quantification (at least 10 total spectral counts).  `r ncol(PSMFrame)` samples were analyzed.  F-tests were performed in edgeR to identify proteins that were affected between groups.  `r sum(qObj$qvalues) < 0.01` proteins were affected between groups (q < 0.01).  
+
+`r nrow(PSMFrame)` Proteins were detected and `r nrow(filteredPSMFrame)` had sufficient data for quantification (at least 10 total spectral counts).  `r ncol(PSMFrame)` biological samples were analyzed from `r length(unique(data$Reference))` raw files.  EdgeR was used to identify affected proteins.  
 
 
 ```{r}
-hist(qObj) 
+## counts by biosample
+data.frame(sample = colnames(PSMtable)[-1],
+           count = colSums(PSMtable[, -1], na.rm = TRUE)) %>%
+  mutate(group = sapply(strsplit(sample, "_"), '[', 1)) %>%
+  ggplot(aes(x = sample, y = count, fill = group)) +
+  ## color samples by group alternating light and dark grey
+  scale_fill_manual(values = rep(c(grey(0.3), grey(0.6)), 
+                                 ceiling(length(unique(group))/2))[1:length(unique(group))]) +
+  geom_col() +
+  theme(legend.position = 'none') +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + 
+  coord_flip()
 ```
 
-**Figure 1** p-value histogram.  A flat distribution of p-values between 0 and 1 indicates no change.  Accumulation of p-values close to 0 indicates that some proteins were affected between groups.  Note that due to multiple testing it may not be possible to identify which ones with a reasonable false discovery rate.  
+**Figure 1** Number of spectral counts per biological sample.  
+
+---
+
+## Summary of affected proteins
 
 ```{r}
-## extract proteins for description
+summaryTable <- data.frame(Contrast = row.names(contrast_mat), q10 = 0,
+                           q30 = 0, estimateChanged = 0)
+
+for(i in 1:nrow(summaryTable)){
+  summaryTable$q10[i] <- sum(qObjList[[i]]$qvalues < 0.1, na.rm = TRUE)
+  summaryTable$q30[i] <- sum(qObjList[[i]]$qvalues < 0.3, na.rm = TRUE)
+  summaryTable$estimateChanged[i] <- round((1-qObjList[[i]]$pi0)*nrow(filteredPSMFrame), 1)
+}
+DT::datatable(summaryTable, rownames = FALSE,
+              colnames = c("Contrast", "q < 0.1", "q < 0.3", "Estimate Changed"))
+```
+
+---
+
+## p-value histograms  
+p-value histograms for each contrast.  Horizontal line indicates the number of true null hypotheses per bin.  
+
+```{r fig.height= 12, fig.width = 12}
+pValHistFun <- function(qlfRes){
+  yintercept <- nrow(qlfRes$table) * qvalue(qlfRes$table$PValue)$pi0/20
+  trtGroups <- strsplit(qlfRes$comparison, " |\\*")[[1]]
+  title <- paste0(trtGroups[4], "-VS-", trtGroups[2])
+  qlfRes$table %>%
+    ggplot(aes(x = PValue)) +
+    geom_histogram(bins = 20) +
+    geom_hline(yintercept = yintercept) +
+    labs(title = title)
+}
+
+#arrangeGrob(lapply(qlfList, pValHistFun), ncol = 2)
+
+do.call("grid.arrange", c(lapply(qlfList, pValHistFun), ncol=2))
+```
+
+---
+
+## Volcano plots
+
+```{r fig.height= 12, fig.width = 12}
+## get proteins for description
 protein <- proteins(MzTabRes) %>%
   mutate(description = sapply(strsplit(description, " OS"), '[', 1))
 
+volcanoFun <- function(qlfRes){
+  trtGroups <- strsplit(qlfRes$comparison, " |\\*")[[1]]
+  title <- paste0(trtGroups[4], "-VS-", trtGroups[2])
+  
+  qlfRes$table %>%
+    mutate(accession = row.names(qlfRes$table)) %>%
+    inner_join(dplyr::select(protein, accession, description), by = "accession") %>%
+    mutate(qValue = qvalue(PValue)$qvalues) %>%
+    mutate(affected = qValue < 0.1) %>%
+    mutate(FC = 2 ^ logFC) %>%
+    mutate(negLogP = -log10(PValue)) %>%
+    ggplot(aes(x = FC, y = negLogP, text = description)) +
+    geom_point(data = function(x) x[!x$affected,], color = "black") +
+    geom_point(data = function(x) x[x$affected,], color = "red") +
+    scale_x_continuous(trans = "log2", breaks = breaks_log(n = 7, base = 2)) +
+    labs(x = "Fold change", y = "-log10 p-value", title = title)
+}
 
-volcanoPlot <- qlf$table %>%
-  mutate(accession = row.names(qlf$table)) %>%
-  inner_join(dplyr::select(protein, accession, description), by = "accession") %>%
-  mutate(FC = 2^logFC) %>%
-  mutate(qValues = qvalue(PValue)$qvalues) %>%
-  mutate(changed = !is.na(qValues) & qValues < 0.001) %>%
-  mutate(PValue = -log10(PValue)) %>%
-  ggplot(aes(x = FC, y = PValue, color = changed, text = description)) +
-  geom_point() +
-  scale_color_manual(values = c("black", "red")) +
-  scale_x_continuous(trans = "log2", breaks = 2^seq(-4, 8, 2)) +
-  labs(x = "Fold change", y = "-log10 p-value")
+ggVolcanos <- lapply(qlfList, volcanoFun)
+#plotlyVolcanos <- lapply(ggVolcanos, ggplotly)
 
-ggplotly(volcanoPlot)
+widgetVolcanos <- htmltools::tagList()
+for (i in 1:length(ggVolcanos)) {
+  widgetVolcanos[[i]] <- as_widget(ggplotly(ggVolcanos[[i]]))
+
+}
+
+
 ```
 
-**Figure 2** Volcano plot.  The x-axis is fold-change (wound vs plasma) and the y axis is -log10 p-value.  Points are red if they were different between groups (F-test q < 0.01)
+```{r}
+widgetVolcanos
+```
+
+
 
 ```{r}
-MAplot <- qlf$table %>%
-  mutate(intensity = rowSums(PSMFrame[OKtest, ])) %>%
-  mutate(accession = row.names(qlf$table)) %>%
-  inner_join(dplyr::select(protein, accession, description), by = "accession") %>%
-  mutate(FC = 2^logFC) %>%
-  mutate(qValues = qvalue(PValue)$qvalues) %>%
-  mutate(changed = !is.na(qValues) & qValues < 0.001) %>%
-  mutate(PValue = -log10(PValue)) %>%
-  ggplot(aes(x = intensity, y = FC, color = changed, text = description)) +
-  geom_point() +
-  scale_color_manual(values = c("black", "red")) +
-  scale_y_continuous(trans = "log2", breaks = 2^seq(-4, 8, 2)) +
-  scale_x_continuous(trans = "log10") +
-  labs(x = "Total Counts", y = "Fold-change")
-
-ggplotly(MAplot)
+# MAplot <- qlf$table %>%
+#   mutate(intensity = rowSums(PSMFrame[OKtest, ])) %>%
+#   mutate(accession = row.names(qlf$table)) %>%
+#   inner_join(dplyr::select(protein, accession, description), by = "accession") %>%
+#   mutate(FC = 2^logFC) %>%
+#   mutate(qValues = qvalue(PValue)$qvalues) %>%
+#   mutate(changed = !is.na(qValues) & qValues < 0.001) %>%
+#   mutate(PValue = -log10(PValue)) %>%
+#   ggplot(aes(x = intensity, y = FC, color = changed, text = description)) +
+#   geom_point() +
+#   scale_color_manual(values = c("black", "red")) +
+#   scale_y_continuous(trans = "log2", breaks = 2^seq(-4, 8, 2)) +
+#   scale_x_continuous(trans = "log10") +
+#   labs(x = "Total Counts", y = "Fold-change")
+# 
+# ggplotly(MAplot)
 
 ```
 
 ```{r}
 ## output table
+prependNamesFun <- function(qlfRes){
+  trtGroups <- strsplit(qlfRes$comparison, " |\\*")[[1]]
+  title <- paste0(trtGroups[4], "-VS-", trtGroups[2])
+  myTable <- qlfRes$table
+  colnames(myTable) <- paste0(colnames(myTable), "_", title)
+  myTable
+}
 
-data.frame(qlf$table, PSMFrame[OKtest, ]) %>%
-  mutate(intensity = rowSums(PSMFrame[OKtest, ])) %>%
-  mutate(accession = row.names(qlf$table)) %>%
+outputTableList <- lapply(qlfList, prependNamesFun)
+
+do.call(cbind, outputTableList) %>%
+  mutate(accession = row.names(.)) %>%
   inner_join(dplyr::select(protein, accession, description), by = "accession") %>%
-  mutate(qValues = qvalue(PValue)$qvalues) %>%
   relocate(description) %>%
   relocate(accession) %>%
-  relocate(intensity, .after = logFC) %>%
-  relocate(qValues, .after = PValue) %>%
-  write.csv(file = "edgeRoutput.csv", row.names = FALSE)
+  write.csv("edgeR_output.csv")
+  
 
 
 ```

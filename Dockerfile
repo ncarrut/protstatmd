@@ -10,9 +10,14 @@ RUN apt-get update \
 
 RUN install2.r --error \
     BiocManager \
+    conflicted \
     dplyr \
+    DT \
     ggplot2 \
+    gridExtra \
+    htmltools \
     plotly \
+    scales \
     tidyr \
     XML \
     xml2 \
