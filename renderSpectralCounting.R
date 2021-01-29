@@ -37,12 +37,12 @@ folder <- dirname(mzTab_input)
 filename <- basename(mzTab_input)
 mzTab_output <- paste0(folder,'/',out_prefix,filename)
 
-cat("#### renderscript log ####", file = "renderscript.log"), sep = "\n")
-cat(paste0("csv input: ", args[1]), file = "renderscript.log"), sep = "\n", append = TRUE)
-cat(paste0("mzTab input: ", args[2]), file = "renderscript.log"), sep = "\n", append = TRUE)
-cat(paste0("contrast str: ", args[3]), file = "renderscript.log"), sep = "\n", append = TRUE)
-cat(paste0("working dir: ", getwd()), file = "renderscript.log"), sep = "\n", append = TRUE)
-cat(paste0("available files: ", list.files()), file = "renderscript.log"), sep = "\n", append = TRUE)
+cat("#### renderscript log ####", file = "renderscript.log", sep = "\n")
+cat(paste0("csv input: ", args[1]), file = "renderscript.log", sep = "\n", append = TRUE)
+cat(paste0("mzTab input: ", args[2]), file = "renderscript.log", sep = "\n", append = TRUE)
+cat(paste0("contrast str: ", args[3]), file = "renderscript.log", sep = "\n", append = TRUE)
+cat(paste0("working dir: ", getwd()), file = "renderscript.log", sep = "\n", append = TRUE)
+cat(paste0("available files: ", list.files()), file = "renderscript.log", sep = "\n", append = TRUE)
 
 #####################################
 ## prepare contrast matrix
@@ -102,8 +102,8 @@ if (length(lvls) == 1)
   }
   
 
-  cat("Contrasts to be tested:", file = "renderscript.log"), sep = "\n", append = TRUE)
-  cat(contrast_mat, file = "renderscript.log"), sep = "\n", append = TRUE)
+  cat("Contrasts to be tested:", file = "renderscript.log", sep = "\n", append = TRUE)
+  cat(contrast_mat, file = "renderscript.log", sep = "\n", append = TRUE)
 
   #print ("Contrasts to be tested:")
   #print (contrast_mat)
