@@ -36,7 +36,7 @@ PSMFrame <- PSMFrame[, -1]
 PSMFrame[is.na(PSMFrame)] <- 0
 
 # remove rows with less than 10 counts
-OKtest <- rowSums(PSMFrame) >= 10
+OKtest <- rowSums(PSMFrame) > 0
 filteredPSMFrame <- PSMFrame[OKtest, ]
 
 ## sort csv2mzTab so that rows correspond to PSMFrame columns
@@ -72,7 +72,7 @@ for(i in 1:nrow(contrast_mat)){
 ```
 
 
-`r nrow(PSMFrame)` Proteins were detected and `r nrow(filteredPSMFrame)` had sufficient data for quantification (at least 10 total spectral counts).  `r ncol(PSMFrame)` biological samples were analyzed from `r length(unique(data$Reference))` raw files.  EdgeR was used to identify affected proteins.  
+`r nrow(PSMFrame)` Proteins were detected.  `r sum(OKtest)` had any quantitative data.  `r ncol(PSMFrame)` biological samples were analyzed from `r length(unique(data$Reference))` raw files.  EdgeR was used to identify affected proteins.  
 
 ```{r}
 ## counts by biosample
