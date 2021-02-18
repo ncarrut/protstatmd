@@ -136,11 +136,12 @@ Volcano plot for the contrast `r rownames(contrast_mat)[whichContrast]`.  The pl
 ## get proteins for description
 protein <- proteins(MzTabRes) %>%
   mutate(description = sapply(strsplit(description, " OS"), '[', 1))
+  distinct(accession, description)
 
 volcanoFun <- function(qlfRes, title){
   qlfRes$table %>%
     mutate(accession = row.names(qlfRes$table)) %>%
-    inner_join(dplyr::select(protein, accession, description), by = "accession") %>%
+    left_join(dplyr::select(protein, accession, description), by = "accession") %>%
     mutate(qValue = qvalue(PValue)$qvalues) %>%
     mutate(affected = qValue < 0.1) %>%
     mutate(FC = 2 ^ logFC) %>%
@@ -183,7 +184,7 @@ ggplotly(volcanoFun(qlfList[[whichContrast]], title = rownames(contrast_mat)[whi
 ## Single output table
 qlfList[[whichContrast]]$table %>%
   mutate(accession = row.names(.)) %>%
-  inner_join(dplyr::select(protein, accession, description), by = "accession") %>%
+  left_join(dplyr::select(protein, accession, description), by = "accession") %>%
   mutate(label = rownames(contrast_mat)[whichContrast]) %>%
   relocate(label) %>%
   relocate(description) %>%
@@ -200,7 +201,7 @@ if(whichContrast == length(qlfList)){
     label <- rownames(contrast_mat)[i]
     outputTableList[[i]] <- qlfList[[i]]$table %>%
       mutate(accession = row.names(.)) %>%
-      inner_join(dplyr::select(protein, accession, description), by = "accession") %>%
+      left_join(dplyr::select(protein, accession, description), by = "accession") %>%
       mutate(label = label) %>%
       relocate(label) %>%
       relocate(description) %>%

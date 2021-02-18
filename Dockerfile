@@ -6,7 +6,9 @@ RUN apt-get update \
     libssl-dev/unstable \
     libxml2-dev \
     libnetcdf-dev \
-    procps
+    procps \
+    python3.6 \
+    rsync
 
 RUN install2.r --error \
     BiocManager \
